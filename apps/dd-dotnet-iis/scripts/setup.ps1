@@ -204,16 +204,15 @@ icacls $PublishPath /grant "IIS_IUSRS:(OI)(CI)R" /T /Q
 # ---------------------------------------------------------------------------
 if ($InstallAgent) {
     if (-not $DDApiKey) { throw "-DDApiKey is required when -InstallAgent is specified." }
-    Write-Step "Installing Datadog Agent"
-    $msiUrl  = "https://s3.amazonaws.com/ddagent-windows-stable/datadog-agent-7-latest.amd64.msi"
-    $msiPath = "$env:TEMP\datadog-agent.msi"
-    Write-Host "    Downloading agent MSI..."
-    Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
-    Write-Host "    Running installer..."
-    $args = "/qn /i `"$msiPath`" APIKEY=`"$DDApiKey`" SITE=`"$DDSite`" TAGS=`"env:demo`""
-    Start-Process msiexec.exe -ArgumentList $args -Wait -NoNewWindow
-    Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
-    Write-OK "Datadog Agent installed"
+    Write-Step "Installing Datadog Agent (with SSI)"
+    $msiArgs = "/qn /i `"https://windows-agent.datadoghq.com/datadog-agent-7-latest.amd64.msi`"" +
+               " /log C:\Windows\SystemTemp\install-datadog.log" +
+               " APIKEY=`"$DDApiKey`" SITE=`"$DDSite`"" +
+               " DD_APM_INSTRUMENTATION_ENABLED=`"host`"" +
+               " DD_APM_INSTRUMENTATION_LIBRARIES=`"dotnet:3`""
+    $p = Start-Process -Wait -PassThru msiexec -ArgumentList $msiArgs
+    if ($p.ExitCode -ne 0) { FAIL "msiexec failed ($($p.ExitCode)) — check C:\Windows\SystemTemp\install-datadog.log" }
+    Write-OK "Datadog Agent installed with SSI"
 }
 
 # ---------------------------------------------------------------------------

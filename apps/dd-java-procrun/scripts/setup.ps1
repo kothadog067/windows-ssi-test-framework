@@ -220,14 +220,15 @@ Write-OK "Service state: $($svc.Status)"
 # ---------------------------------------------------------------------------
 if ($InstallAgent) {
     if (-not $DDApiKey) { throw "-DDApiKey is required when -InstallAgent is specified." }
-    Write-Step "Installing Datadog Agent"
-    $msiUrl  = "https://s3.amazonaws.com/ddagent-windows-stable/datadog-agent-7-latest.amd64.msi"
-    $msiPath = "$env:TEMP\datadog-agent.msi"
-    (New-Object System.Net.WebClient).DownloadFile($msiUrl, $msiPath)
-    $msiArgs = "/qn /i `"$msiPath`" APIKEY=`"$DDApiKey`" SITE=`"$DDSite`" TAGS=`"env:demo`""
-    Start-Process msiexec.exe -ArgumentList $msiArgs -Wait -NoNewWindow
-    Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
-    Write-OK "Datadog Agent installed"
+    Write-Step "Installing Datadog Agent (with SSI)"
+    $msiArgs = "/qn /i `"https://windows-agent.datadoghq.com/datadog-agent-7-latest.amd64.msi`"" +
+               " /log C:\Windows\SystemTemp\install-datadog.log" +
+               " APIKEY=`"$DDApiKey`" SITE=`"$DDSite`"" +
+               " DD_APM_INSTRUMENTATION_ENABLED=`"host`"" +
+               " DD_APM_INSTRUMENTATION_LIBRARIES=`"java:1`""
+    $p = Start-Process -Wait -PassThru msiexec -ArgumentList $msiArgs
+    if ($p.ExitCode -ne 0) { FAIL "msiexec failed ($($p.ExitCode)) — check C:\Windows\SystemTemp\install-datadog.log" }
+    Write-OK "Datadog Agent installed with SSI"
 }
 
 # ---------------------------------------------------------------------------

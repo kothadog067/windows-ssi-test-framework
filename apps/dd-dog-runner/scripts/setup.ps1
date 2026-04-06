@@ -139,34 +139,14 @@ if ($InstallAgent) {
     if (-not $DDApiKey) { FAIL "-InstallAgent requires -DDApiKey or DD_API_KEY env var" }
 
     Log "Installing Datadog Agent (with SSI)..."
-    $msiUrl  = "https://s3.amazonaws.com/ddagent-windows-stable/datadog-agent-7-latest.amd64.msi"
-    $msiPath = "$env:TEMP\datadog-agent.msi"
-    Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
-
-    $msiArgs = @(
-        "/i", $msiPath,
-        "APIKEY=$DDApiKey",
-        "SITE=$DDSite",
-        "HOSTNAME_FQDN_ENABLED=true",
-        "/qn", "/l*v", "$env:TEMP\dd-agent-install.log"
-    )
-    Start-Process msiexec.exe -Wait -ArgumentList $msiArgs
-    OK "Datadog Agent installed"
-
-    # Enable Windows Host-Wide SSI in datadog.yaml
-    $ddYaml = "C:\ProgramData\Datadog\datadog.yaml"
-    if (Test-Path $ddYaml) {
-        $content = Get-Content $ddYaml -Raw
-        if ($content -notmatch "windows_single_step_instrumentation") {
-            Add-Content $ddYaml "`r`n# Windows Host-Wide SSI`r`napm_config:`r`n  windows_single_step_instrumentation:`r`n    enabled: true"
-            OK "SSI enabled in datadog.yaml"
-        } else {
-            OK "SSI already present in datadog.yaml"
-        }
-    }
-
-    Restart-Service -Name "datadogagent" -ErrorAction SilentlyContinue
-    OK "Datadog Agent restarted"
+    $msiArgs = "/qn /i `"https://windows-agent.datadoghq.com/datadog-agent-7-latest.amd64.msi`"" +
+               " /log C:\Windows\SystemTemp\install-datadog.log" +
+               " APIKEY=`"$DDApiKey`" SITE=`"$DDSite`"" +
+               " DD_APM_INSTRUMENTATION_ENABLED=`"host`"" +
+               " DD_APM_INSTRUMENTATION_LIBRARIES=`"dotnet:3,java:1`""
+    $p = Start-Process -Wait -PassThru msiexec -ArgumentList $msiArgs
+    if ($p.ExitCode -ne 0) { FAIL "msiexec failed ($($p.ExitCode)) — check C:\Windows\SystemTemp\install-datadog.log" }
+    OK "Datadog Agent installed with SSI"
 }
 
 # ── 14. Start services ────────────────────────────────────────────────────────

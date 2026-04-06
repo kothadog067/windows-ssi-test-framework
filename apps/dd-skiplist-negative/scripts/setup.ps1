@@ -39,16 +39,15 @@ Log "=== dd-skiplist-negative — Setup ==="
 if ($InstallAgent) {
     if (-not $DDApiKey) { FAIL "-InstallAgent requires -DDApiKey or DD_API_KEY env var" }
 
-    Log "Installing Datadog Agent..."
-    $msiPath = "$env:TEMP\datadog-agent.msi"
-    Invoke-WebRequest -Uri "https://s3.amazonaws.com/ddagent-windows-stable/datadog-agent-7-latest.amd64.msi" -OutFile $msiPath
-    Start-Process msiexec.exe -Wait -ArgumentList @(
-        "/i", $msiPath,
-        "APIKEY=$DDApiKey", "SITE=$DDSite",
-        "/qn", "/l*v", "$env:TEMP\dd-agent-install.log"
-    )
-    Restart-Service -Name "datadogagent" -ErrorAction SilentlyContinue
-    OK "Datadog Agent installed and running"
+    Log "Installing Datadog Agent (with SSI)..."
+    $msiArgs = "/qn /i `"https://windows-agent.datadoghq.com/datadog-agent-7-latest.amd64.msi`"" +
+               " /log C:\Windows\SystemTemp\install-datadog.log" +
+               " APIKEY=`"$DDApiKey`" SITE=`"$DDSite`"" +
+               " DD_APM_INSTRUMENTATION_ENABLED=`"host`"" +
+               " DD_APM_INSTRUMENTATION_LIBRARIES=`"dotnet:3,java:1`""
+    $p = Start-Process -Wait -PassThru msiexec -ArgumentList $msiArgs
+    if ($p.ExitCode -ne 0) { FAIL "msiexec failed ($($p.ExitCode)) — check C:\Windows\SystemTemp\install-datadog.log" }
+    OK "Datadog Agent installed with SSI"
     Start-Sleep -Seconds 10  # let ddinjector settle
 } else {
     # Verify agent is already running
