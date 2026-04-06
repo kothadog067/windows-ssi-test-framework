@@ -92,7 +92,7 @@ resource "aws_security_group" "app_sg" {
 
 # ── EC2 Instance ──────────────────────────────────────────────────────────────
 resource "aws_instance" "app" {
-  ami                    = data.aws_ami.windows_2025.id
+  ami                    = var.ami_id != "" ? var.ami_id : data.aws_ami.windows_2025.id
   instance_type          = var.instance_type
   iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
   vpc_security_group_ids = [aws_security_group.app_sg.id]

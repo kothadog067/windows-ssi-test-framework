@@ -44,3 +44,9 @@ variable "allowed_cidr" {
   type        = string
   default     = "0.0.0.0/0"
 }
+
+variable "ami_id" {
+  description = "Optional pre-baked AMI ID (e.g. built by Packer). When non-empty this overrides the data source lookup for the latest Windows Server 2025 Base AMI. Leave empty to use the data source."
+  type        = string
+  default     = ""
+}

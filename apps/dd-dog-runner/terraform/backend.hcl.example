@@ -1,0 +1,10 @@
+# Copy to backend.hcl and fill in your values.
+# Run: terraform init -backend-config=backend.hcl
+#
+# Create the bucket/table first: cd terraform/bootstrap && terraform apply
+
+bucket         = "ssi-test-tf-state"
+key            = "ssi-tests/dd-dog-runner/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "ssi-test-tf-locks"
+encrypt        = true

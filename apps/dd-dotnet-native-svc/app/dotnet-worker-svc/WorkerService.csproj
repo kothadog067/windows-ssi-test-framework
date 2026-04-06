@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WorkerSvc</RootNamespace>
+    <AssemblyName>WorkerSvc</AssemblyName>
+    <!-- Self-contained, single-file exe targeting win-x64 (set at publish time) -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <!-- Allow sc.exe to register the exe directly -->
+    <WindowsService>true</WindowsService>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Hosting infrastructure -->
+    <PackageReference Include="Microsoft.Extensions.Hosting"               Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

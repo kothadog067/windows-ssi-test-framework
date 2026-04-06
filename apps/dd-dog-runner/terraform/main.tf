@@ -5,6 +5,13 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  # Optional S3 backend for shared state + locking.
+  # To enable: copy backend.hcl.example → backend.hcl, fill in values, then:
+  #   terraform init -backend-config=backend.hcl
+  # Leave this block commented out to use local state (fine for one-off runs).
+  #
+  # backend "s3" {}
 }
 
 provider "aws" {

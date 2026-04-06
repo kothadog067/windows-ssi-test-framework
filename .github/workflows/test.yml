@@ -1,0 +1,228 @@
+name: Windows SSI Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      APP_FILTER:
+        description: "Filter to a specific app name (leave empty to run all)"
+        required: false
+        default: ""
+      SKIP_DESTROY:
+        description: "Skip terraform destroy after tests (useful for debugging)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+  schedule:
+    # Nightly at 2am UTC
+    - cron: "0 2 * * *"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/**"
+      - "terraform/**"
+
+concurrency:
+  group: windows-ssi-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Discover all apps in the apps/ directory and emit a matrix
+  # ──────────────────────────────────────────────────────────────────────────
+  discover-apps:
+    name: Discover Apps
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Discover app names
+        id: set-matrix
+        shell: bash
+        run: |
+          # Find every immediate subdirectory under apps/ and collect its basename.
+          # If the caller supplied APP_FILTER via workflow_dispatch we honour it;
+          # otherwise we build the full dynamic list.
+          FILTER="${{ github.event.inputs.APP_FILTER }}"
+
+          if [[ -n "$FILTER" ]]; then
+            # Single-app run requested manually
+            echo "matrix={\"app\":[\"${FILTER}\"]}" >> "$GITHUB_OUTPUT"
+          else
+            # Auto-discover: every directory directly inside apps/ is an app.
+            mapfile -t APPS < <(
+              find apps -mindepth 1 -maxdepth 1 -type d \
+                | sort \
+                | xargs -I{} basename {}
+            )
+
+            if [[ ${#APPS[@]} -eq 0 ]]; then
+              echo "ERROR: No apps found under apps/. Aborting." >&2
+              exit 1
+            fi
+
+            # Build a compact JSON array, e.g. {"app":["app1","app2"]}
+            JSON_ARRAY=$(printf '%s\n' "${APPS[@]}" \
+              | jq -R . \
+              | jq -sc '{"app": .}')
+
+            echo "Discovered apps: ${APPS[*]}"
+            echo "matrix=${JSON_ARRAY}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Run tests for each app in the matrix
+  # ──────────────────────────────────────────────────────────────────────────
+  run-tests:
+    name: Test / ${{ matrix.app }}
+    needs: discover-apps
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-apps.outputs.matrix) }}
+
+    env:
+      APP_FILTER: ${{ matrix.app }}
+      SKIP_DESTROY: ${{ github.event.inputs.SKIP_DESTROY || 'false' }}
+      DD_API_KEY: ${{ secrets.DD_API_KEY }}
+      DD_SITE: ${{ secrets.DD_SITE }}
+      TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: windows-ssi-tests-${{ matrix.app }}-${{ github.run_id }}
+
+      - name: Run tests for ${{ matrix.app }}
+        shell: bash
+        run: |
+          echo "::group::Running tests for app: ${APP_FILTER}"
+          bash run_all.sh
+          echo "::endgroup::"
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.app }}
+          path: |
+            results/junit-*.xml
+            results/logs/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Aggregate JUnit results and post a summary table
+  # ──────────────────────────────────────────────────────────────────────────
+  summary:
+    name: Test Summary
+    needs: run-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Always run so we get a summary even when some jobs failed.
+    if: always()
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all test artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+          # Download every artifact whose name starts with "test-results-"
+          pattern: "test-results-*"
+          merge-multiple: false
+
+      - name: Install xmllint (for JUnit parsing)
+        run: sudo apt-get install -y --no-install-recommends libxml2-utils
+
+      - name: Aggregate JUnit results and write summary
+        shell: bash
+        run: |
+          echo "# Windows SSI Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| App | Tests | Passed | Failed | Skipped | Errors |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|------:|-------:|-------:|--------:|-------:|" >> "$GITHUB_STEP_SUMMARY"
+
+          TOTAL_TESTS=0
+          TOTAL_PASSED=0
+          TOTAL_FAILED=0
+          TOTAL_SKIPPED=0
+          TOTAL_ERRORS=0
+
+          # Walk every downloaded artifact directory
+          for artifact_dir in all-results/test-results-*/; do
+            app_name="${artifact_dir#all-results/test-results-}"
+            app_name="${app_name%/}"
+
+            tests=0; failures=0; skipped=0; errors=0
+
+            # Parse every JUnit XML file found for this app
+            while IFS= read -r -d '' xml_file; do
+              t=$(xmllint   --xpath 'string(//testsuite/@tests)'    "$xml_file" 2>/dev/null || echo 0)
+              f=$(xmllint   --xpath 'string(//testsuite/@failures)'  "$xml_file" 2>/dev/null || echo 0)
+              s=$(xmllint   --xpath 'string(//testsuite/@skipped)'   "$xml_file" 2>/dev/null || echo 0)
+              e=$(xmllint   --xpath 'string(//testsuite/@errors)'    "$xml_file" 2>/dev/null || echo 0)
+              tests=$(( tests + ${t:-0} ))
+              failures=$(( failures + ${f:-0} ))
+              skipped=$(( skipped + ${s:-0} ))
+              errors=$(( errors + ${e:-0} ))
+            done < <(find "$artifact_dir" -name 'junit-*.xml' -print0 2>/dev/null)
+
+            passed=$(( tests - failures - skipped - errors ))
+            passed=$(( passed < 0 ? 0 : passed ))
+
+            # Status icon
+            if [[ $failures -gt 0 || $errors -gt 0 ]]; then
+              icon="FAIL"
+            elif [[ $tests -gt 0 ]]; then
+              icon="PASS"
+            else
+              icon="N/A"
+            fi
+
+            echo "| ${app_name} (${icon}) | ${tests} | ${passed} | ${failures} | ${skipped} | ${errors} |" >> "$GITHUB_STEP_SUMMARY"
+
+            TOTAL_TESTS=$(( TOTAL_TESTS + tests ))
+            TOTAL_PASSED=$(( TOTAL_PASSED + passed ))
+            TOTAL_FAILED=$(( TOTAL_FAILED + failures ))
+            TOTAL_SKIPPED=$(( TOTAL_SKIPPED + skipped ))
+            TOTAL_ERRORS=$(( TOTAL_ERRORS + errors ))
+          done
+
+          echo "| **TOTAL** | **${TOTAL_TESTS}** | **${TOTAL_PASSED}** | **${TOTAL_FAILED}** | **${TOTAL_SKIPPED}** | **${TOTAL_ERRORS}** |" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run triggered by: \`${{ github.event_name }}\` on \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Workflow run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail this job if there were test failures so the overall workflow
+          # status reflects the real outcome.
+          if [[ $TOTAL_FAILED -gt 0 || $TOTAL_ERRORS -gt 0 ]]; then
+            echo "::error::${TOTAL_FAILED} test failure(s) and ${TOTAL_ERRORS} error(s) detected across all apps."
+            exit 1
+          fi

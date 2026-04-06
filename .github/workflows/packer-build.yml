@@ -1,0 +1,170 @@
+name: Packer Build – Windows SSI AMI
+
+on:
+  workflow_dispatch:
+    inputs:
+      PACKER_VAR_FILE:
+        description: "Optional path to an extra Packer variable file (relative to repo root)"
+        required: false
+        default: ""
+      DRY_RUN:
+        description: "Validate the template only, do not build an AMI"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "packer/**"
+
+concurrency:
+  group: packer-build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  PACKER_DIR: packer
+  # Packer version to pin; bump here when upgrading.
+  PACKER_VERSION: "1.11.0"
+
+jobs:
+  packer-build:
+    name: Packer Init & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── AWS authentication via OIDC ──────────────────────────────────────
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: packer-build-${{ github.run_id }}
+
+      # ── Install the pinned Packer version ────────────────────────────────
+      - name: Install Packer ${{ env.PACKER_VERSION }}
+        shell: bash
+        run: |
+          PACKER_ZIP="packer_${PACKER_VERSION}_linux_amd64.zip"
+          PACKER_URL="https://releases.hashicorp.com/packer/${PACKER_VERSION}/${PACKER_ZIP}"
+
+          echo "Downloading Packer ${PACKER_VERSION} from ${PACKER_URL}"
+          curl -fsSL "$PACKER_URL" -o /tmp/packer.zip
+          unzip -q /tmp/packer.zip -d /tmp/packer-bin
+          sudo install -m 0755 /tmp/packer-bin/packer /usr/local/bin/packer
+          packer version
+
+      # ── packer init ──────────────────────────────────────────────────────
+      - name: Packer init
+        shell: bash
+        working-directory: ${{ env.PACKER_DIR }}
+        run: |
+          echo "::group::packer init"
+          packer init .
+          echo "::endgroup::"
+
+      # ── packer validate ──────────────────────────────────────────────────
+      - name: Packer validate
+        shell: bash
+        working-directory: ${{ env.PACKER_DIR }}
+        run: |
+          EXTRA_ARGS=()
+          if [[ -n "${{ github.event.inputs.PACKER_VAR_FILE }}" ]]; then
+            EXTRA_ARGS+=("-var-file=../${{ github.event.inputs.PACKER_VAR_FILE }}")
+          fi
+
+          echo "::group::packer validate"
+          packer validate "${EXTRA_ARGS[@]}" .
+          echo "::endgroup::"
+
+      # ── packer build (skipped on dry-run) ────────────────────────────────
+      - name: Packer build
+        id: packer-build
+        if: ${{ github.event.inputs.DRY_RUN != 'true' }}
+        shell: bash
+        working-directory: ${{ env.PACKER_DIR }}
+        env:
+          PACKER_LOG: 1
+          PACKER_LOG_PATH: /tmp/packer-build.log
+        run: |
+          EXTRA_ARGS=()
+          if [[ -n "${{ github.event.inputs.PACKER_VAR_FILE }}" ]]; then
+            EXTRA_ARGS+=("-var-file=../${{ github.event.inputs.PACKER_VAR_FILE }}")
+          fi
+
+          # Run packer build and capture stdout so we can extract the AMI ID.
+          echo "::group::packer build"
+          set +e
+          packer build -color=false -on-error=cleanup "${EXTRA_ARGS[@]}" . \
+            | tee /tmp/packer-output.txt
+          BUILD_EXIT="${PIPESTATUS[0]}"
+          set -e
+          echo "::endgroup::"
+
+          if [[ "$BUILD_EXIT" -ne 0 ]]; then
+            echo "::error::packer build failed with exit code ${BUILD_EXIT}. Check the log artifact."
+            exit "$BUILD_EXIT"
+          fi
+
+          # Extract the AMI ID from Packer's output line:
+          #   --> amazon-ebs.windows_ssi: AMIs were created: ... ami-xxxxxxxxxxxxxxxxx
+          AMI_ID=$(grep -oP 'ami-[0-9a-f]+' /tmp/packer-output.txt | tail -n 1 || true)
+
+          if [[ -z "$AMI_ID" ]]; then
+            echo "::warning::Could not parse AMI ID from packer output. Check the build log."
+          else
+            echo "ami_id=${AMI_ID}" >> "$GITHUB_OUTPUT"
+            echo "Detected AMI ID: ${AMI_ID}"
+          fi
+
+      # ── Upload Packer log on failure ──────────────────────────────────────
+      - name: Upload Packer log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packer-build-log-${{ github.run_id }}
+          path: /tmp/packer-build.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ── Write workflow summary ────────────────────────────────────────────
+      - name: Write workflow summary
+        if: always()
+        shell: bash
+        run: |
+          AMI_ID="${{ steps.packer-build.outputs.ami_id }}"
+          DRY_RUN="${{ github.event.inputs.DRY_RUN }}"
+          REGION="${{ secrets.AWS_REGION }}"
+
+          echo "# Packer Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Packer version | \`${PACKER_VERSION}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| AWS region | \`${REGION}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Triggered by | \`${{ github.event_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch / ref | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Dry-run only | \`${DRY_RUN:-false}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -n "$AMI_ID" ]]; then
+            CONSOLE_URL="https://${REGION}.console.aws.amazon.com/ec2/home?region=${REGION}#Images:imageId=${AMI_ID}"
+            echo "| AMI ID | [\`${AMI_ID}\`](${CONSOLE_URL}) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| AMI ID | N/A (dry-run or build failed) |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Workflow run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> "$GITHUB_STEP_SUMMARY"

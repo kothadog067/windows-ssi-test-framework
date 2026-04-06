@@ -5,6 +5,12 @@
 **/terraform.tfstate
 **/terraform.tfstate.backup
 **/.terraform.tfstate.lock.info
+**/backend.hcl
+**/packer-manifest.json
+**/cost_guard_lambda.zip
+
+# Test results
+results/
 
 # Secrets
 *.env
