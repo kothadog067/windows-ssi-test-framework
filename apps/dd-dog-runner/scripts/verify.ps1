@@ -1,7 +1,8 @@
 # =============================================================================
 #  DD Dog Runner — Verify Script
 #  Full SSI instrumentation validation: traffic generation, health checks,
-#  DD APM trace validation via API v2, SSI injection status, JSON summary.
+#  DD APM trace validation via API v2, DLL injection check, skip list check,
+#  SSI injection status, JSON summary.
 #
 #  Standard interface: verify.ps1 [-TargetHost <ip>] [-DDApiKey <key>]
 #                                  [-DDSite <site>] [-TimeoutSec <n>]
@@ -26,11 +27,14 @@ $scriptStart           = Get-Date
 # --------------------------------------------------------------------------- #
 $failed = 0
 $checks = [ordered]@{
-    health_dotnet = $false
-    health_java   = $false
-    traces_dotnet = $false
-    traces_java   = $false
-    ssi_injected  = $false
+    health_dotnet         = $false
+    health_java           = $false
+    dll_injection_dotnet  = $false
+    dll_injection_java    = $false
+    skiplist_clean        = $false
+    traces_dotnet         = $false
+    traces_java           = $false
+    ssi_injected          = $false
 }
 
 # --------------------------------------------------------------------------- #
@@ -54,6 +58,38 @@ function Write-Fail([string]$msg) {
 
 function Write-Warn([string]$msg) {
     Write-Host "  [WARN] $msg" -ForegroundColor Yellow
+}
+
+# Test-DllInjected: returns $true if ddinjector_x64.dll is loaded in the named process.
+# Uses tasklist /m which is the same mechanism as validate_injection_process.exe (GetModuleHandleA).
+function Test-DllInjected {
+    param(
+        [string]$ProcessName,
+        [string]$DllName = "ddinjector_x64.dll"
+    )
+    $output = & tasklist /fi "imagename eq $ProcessName" /m $DllName 2>&1
+    return ($output | Where-Object { $_ -match [regex]::Escape($ProcessName) }).Count -gt 0
+}
+
+# Test-SkipListClean: returns list of skip-listed processes that wrongly have the DLL loaded.
+# Per default-skiplist.yaml: agent.exe, datadogagent.exe, trace-agent.exe, etc. must NEVER be instrumented.
+function Test-SkipListClean {
+    $skipProcs = @(
+        "datadogagent.exe",
+        "agent.exe",
+        "trace-agent.exe",
+        "process-agent.exe",
+        "system-probe.exe",
+        "security-agent.exe"
+    )
+    $violations = @()
+    foreach ($proc in $skipProcs) {
+        $output = & tasklist /fi "imagename eq $proc" /m "ddinjector_x64.dll" 2>&1
+        if ($output | Where-Object { $_ -match [regex]::Escape($proc) }) {
+            $violations += $proc
+        }
+    }
+    return $violations
 }
 
 # Invoke-WebRequest with retry.
@@ -274,8 +310,6 @@ if (-not $DDApiKey) {
                     $firstSpan  = $resp.data[0]
                     $meta       = $firstSpan.attributes.tags
 
-                    # The tag key format in v2 spans is a flat hashtable of tag strings.
-                    # We look for keys that match the tag names we care about.
                     $tracerVer  = $meta."_dd.tracer_version"
                     $langTag    = $meta."language"
 
@@ -371,6 +405,40 @@ if ($ssiConfirmed) {
     $checks["ssi_injected"] = $true
 } else {
     Write-Host "  [INFO] SSI injection not confirmed (check ddinjector logs in $logDir)" -ForegroundColor DarkYellow
+}
+
+# --------------------------------------------------------------------------- #
+#  SECTION 5.5 — DLL injection check (authoritative: ddinjector_x64.dll in    #
+#               target process module list, same as validate_injection_process) #
+# --------------------------------------------------------------------------- #
+
+Write-Section "DLL INJECTION CHECK (ddinjector_x64.dll in process module list)"
+
+# Check .NET game server process (dotnet.exe via NSSM)
+if (Test-DllInjected -ProcessName "dotnet.exe") {
+    Write-Ok "ddinjector_x64.dll loaded in dotnet.exe (.NET game server)"
+    $checks["dll_injection_dotnet"] = $true
+} else {
+    Write-Fail "ddinjector_x64.dll NOT found in dotnet.exe — .NET SSI injection failed"
+}
+
+# Check Java leaderboard process (java.exe via NSSM)
+if (Test-DllInjected -ProcessName "java.exe") {
+    Write-Ok "ddinjector_x64.dll loaded in java.exe (Java leaderboard)"
+    $checks["dll_injection_java"] = $true
+} else {
+    Write-Fail "ddinjector_x64.dll NOT found in java.exe — Java SSI injection failed"
+}
+
+# Skip list check: per default-skiplist.yaml, DD agent processes must NEVER be instrumented
+Write-Host ""
+Write-Host "  Verifying skip list (DD agent processes must NOT be instrumented)..."
+$violations = Test-SkipListClean
+if ($violations.Count -eq 0) {
+    Write-Ok "Skip list clean — no agent processes instrumented"
+    $checks["skiplist_clean"] = $true
+} else {
+    Write-Fail "Skip list violation: ddinjector_x64.dll found in: $($violations -join ', ')"
 }
 
 # --------------------------------------------------------------------------- #

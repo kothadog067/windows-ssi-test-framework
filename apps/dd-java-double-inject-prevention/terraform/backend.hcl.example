@@ -1,0 +1,5 @@
+bucket         = "ssi-test-tf-state"
+key            = "ssi-tests/dd-java-double-inject-prevention/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "ssi-test-tf-locks"
+encrypt        = true

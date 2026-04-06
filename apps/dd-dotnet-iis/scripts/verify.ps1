@@ -1,6 +1,8 @@
 <#
 .SYNOPSIS
     Verifies the dd-dotnet-iis application is healthy and (optionally) sending traces.
+    Also checks ddinjector_x64.dll is loaded in w3wp.exe (IIS SSI injection) and
+    that skip-listed Datadog agent processes are NOT instrumented.
 
 .PARAMETER TargetHost
     Hostname or IP to check. Defaults to localhost.
@@ -53,6 +55,42 @@ function Invoke-WithRetry {
         }
     }
     return $null
+}
+
+# ---------------------------------------------------------------------------
+# Helper: DLL injection check — same mechanism as validate_injection_process.exe
+# Returns $true if ddinjector_x64.dll is in the process module list
+# ---------------------------------------------------------------------------
+function Test-DllInjected {
+    param(
+        [string]$ProcessName,
+        [string]$DllName = "ddinjector_x64.dll"
+    )
+    $output = & tasklist /fi "imagename eq $ProcessName" /m $DllName 2>&1
+    return ($output | Where-Object { $_ -match [regex]::Escape($ProcessName) }).Count -gt 0
+}
+
+# ---------------------------------------------------------------------------
+# Helper: Skip list check — per default-skiplist.yaml, DD agent processes
+# must NEVER have ddinjector_x64.dll loaded
+# ---------------------------------------------------------------------------
+function Test-SkipListClean {
+    $skipProcs = @(
+        "datadogagent.exe",
+        "agent.exe",
+        "trace-agent.exe",
+        "process-agent.exe",
+        "system-probe.exe",
+        "security-agent.exe"
+    )
+    $violations = @()
+    foreach ($proc in $skipProcs) {
+        $output = & tasklist /fi "imagename eq $proc" /m "ddinjector_x64.dll" 2>&1
+        if ($output | Where-Object { $_ -match [regex]::Escape($proc) }) {
+            $violations += $proc
+        }
+    }
+    return $violations
 }
 
 # ---------------------------------------------------------------------------
@@ -114,24 +152,60 @@ try {
 $results.checks["app_pool_started"] = @{ pool = "DDIisAppPool"; pass = $poolPass }
 
 # ---------------------------------------------------------------------------
-# Check 6: Trace check (optional — only if API key provided)
+# Check 6: DLL injection — ddinjector_x64.dll must be loaded in w3wp.exe
+# IIS worker process (w3wp.exe) is the injection target for IIS-hosted apps.
+# This is the authoritative check: same as validate_injection_process.exe.
+# ---------------------------------------------------------------------------
+$dllInjectPass = Test-DllInjected -ProcessName "w3wp.exe"
+$results.checks["dll_injection_w3wp"] = @{
+    process = "w3wp.exe"
+    dll     = "ddinjector_x64.dll"
+    pass    = $dllInjectPass
+}
+if ($dllInjectPass) {
+    Write-Host "  [OK]   ddinjector_x64.dll loaded in w3wp.exe (IIS SSI injection confirmed)" -ForegroundColor Green
+} else {
+    Write-Host "  [FAIL] ddinjector_x64.dll NOT found in w3wp.exe — IIS SSI injection failed" -ForegroundColor Red
+}
+
+# ---------------------------------------------------------------------------
+# Check 7: Skip list — DD agent processes must NOT be instrumented
+# Per default-skiplist.yaml in the ddinjector source
+# ---------------------------------------------------------------------------
+$skipViolations = Test-SkipListClean
+$skipPass       = ($skipViolations.Count -eq 0)
+$results.checks["skiplist_clean"] = @{
+    pass       = $skipPass
+    violations = $skipViolations
+}
+if ($skipPass) {
+    Write-Host "  [OK]   Skip list clean — no agent processes instrumented" -ForegroundColor Green
+} else {
+    Write-Host "  [FAIL] Skip list violation: $($skipViolations -join ', ') has ddinjector_x64.dll loaded" -ForegroundColor Red
+}
+
+# ---------------------------------------------------------------------------
+# Check 8: Trace check (optional — only if API key provided)
 # ---------------------------------------------------------------------------
 if ($DDApiKey) {
     Write-Host "Waiting up to ${WaitForTracesSec}s for traces from dd-iis-app..."
     $tracePass  = $false
     $deadline   = (Get-Date).AddSeconds($WaitForTracesSec)
     $searchSvc  = "dd-iis-app"
-    $ddApiBase  = "https://api.${DDSite}/api/v1"
-    $headers    = @{ "DD-API-KEY" = $DDApiKey; "DD-APPLICATION-KEY" = $DDApiKey }
+    $ddHeaders  = @{ "DD-API-KEY" = $DDApiKey }
 
     while ((Get-Date) -lt $deadline -and -not $tracePass) {
         try {
-            $from  = [int](Get-Date).AddMinutes(-5).ToUniversalTime().Subtract([datetime]"1970-01-01").TotalSeconds
-            $to    = [int](Get-Date).ToUniversalTime().Subtract([datetime]"1970-01-01").TotalSeconds
-            $query = "service:$searchSvc"
-            $uri   = "${ddApiBase}/query?query=${query}&from=${from}&to=${to}"
-            $tr    = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -UseBasicParsing
-            if ($tr.series.Count -gt 0) { $tracePass = $true }
+            $fromMs = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()
+            $toMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            $q      = [Uri]::EscapeDataString("service:$searchSvc")
+            $uri    = "https://api.${DDSite}/api/v2/spans?filter[query]=$q&filter[from]=$fromMs&filter[to]=$toMs&page[limit]=5"
+            $tr     = Invoke-RestMethod -Uri $uri -Headers $ddHeaders -Method Get -TimeoutSec 15
+            if ($tr.data -and $tr.data.Count -gt 0) {
+                $tracePass = $true
+                $tv = $tr.data[0].attributes.tags."_dd.tracer_version"
+                Write-Host "  [OK]   Traces found — _dd.tracer_version=$tv" -ForegroundColor Green
+            }
         } catch {}
         if (-not $tracePass) { Start-Sleep -Seconds 5 }
     }
@@ -149,5 +223,6 @@ $results.overall_pass = $allPass
 
 $json = $results | ConvertTo-Json -Depth 5
 Write-Output $json
+$json | Out-File -FilePath (Join-Path (Get-Location) "results.json") -Encoding utf8 -Force
 
 if ($allPass) { exit 0 } else { exit 1 }

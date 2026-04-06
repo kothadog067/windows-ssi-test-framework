@@ -26,9 +26,15 @@ windows-ssi-test-framework/
 │
 └── apps/                             ← one directory per test app
     ├── dd-dog-runner/                ← .NET 8 (NSSM) + Java 21 (NSSM)
-    ├── dd-dotnet-iis/                ← .NET 8 on IIS application pool
-    ├── dd-java-procrun/              ← Java via Apache Commons Daemon (Procrun)
-    └── dd-dotnet-native-svc/         ← .NET Worker Service via sc.exe (no NSSM)
+    ├── dd-dotnet-iis/                ← .NET 8 on IIS application pool (w3wp.exe)
+    ├── dd-java-procrun/              ← Java via Apache Commons Daemon (prunsrv.exe)
+    ├── dd-dotnet-native-svc/         ← .NET Worker Service via sc.exe (no NSSM)
+    ├── dd-java-tomcat/               ← Java via Tomcat 9 (tomcat9.exe)
+    ├── dd-dotnet-selfcontained/      ← .NET 8 self-contained single-file (PE bundle sig)
+    ├── dd-dotnet-framework/          ← .NET Framework 4.8 (PE COM descriptor)
+    ├── dd-skiplist-negative/         ← Negative: skip-listed processes NOT instrumented
+    ├── dd-lifecycle-enabledisable/   ← Enable/disable SSI lifecycle (apm instrument/uninstrument)
+    └── dd-java-double-inject-prevention/ ← Java double injection prevention
 ```
 
 Every app under `apps/` has the **same external shape**:
@@ -218,12 +224,44 @@ make destroy-all AWS_REGION=us-east-1
 
 ## Test Apps
 
-| App | Runtime | Service type | Port(s) | SSI injection path |
-|-----|---------|--------------|---------|-------------------|
-| `dd-dog-runner` | .NET 8 + Java 21 | NSSM | 8080, 8081 | NSSM env vars → CLR/JVM |
-| `dd-dotnet-iis` | .NET 8 | IIS app pool | 80, 8082 | App pool env vars → AspNetCoreModuleV2 |
-| `dd-java-procrun` | Java 21 | Apache Procrun | 8083 | `--Environment` flag on prunsrv |
-| `dd-dotnet-native-svc` | .NET 8 | sc.exe (native) | 8084 | Registry `HKLM\...\Services\...\Environment` |
+### Positive Tests (verify injection IS working)
+
+| App | Runtime | Service type | Port(s) | Injection path | Process detected by |
+|-----|---------|--------------|---------|----------------|---------------------|
+| `dd-dog-runner` | .NET 8 + Java 21 | NSSM | 8080, 8081 | NSSM env vars | `dotnet.exe`, `java.exe` |
+| `dd-dotnet-iis` | .NET 8 | IIS app pool | 80, 8082 | App pool env vars → AspNetCoreModuleV2 | `w3wp.exe` |
+| `dd-java-procrun` | Java 21 | Apache Procrun (prunsrv) | 8083 | `--Environment` on prunsrv | `prunsrv.exe` (`is_procrun_service`) |
+| `dd-dotnet-native-svc` | .NET 8 (self-contained) | sc.exe (native) | 8084 | Registry `HKLM\...\Services\...\Environment` | `WorkerSvc.exe` |
+| `dd-java-tomcat` | Java 21 / Tomcat 9 | Tomcat Windows service | 8085 | Tomcat service env | `tomcat9.exe` (`is_tomcat_exe`) |
+| `dd-dotnet-selfcontained` | .NET 8 single-file | sc.exe | 8086 | Registry env | `DotnetSelfContained.exe` (PE bundle sig) |
+| `dd-dotnet-framework` | .NET Framework 4.8 | NSSM | 8087 | NSSM env vars | `DotnetFramework.exe` (PE COM descriptor) |
+
+### Negative / Edge-Case Tests
+
+| App | What it tests | Pass condition |
+|-----|---------------|----------------|
+| `dd-skiplist-negative` | Skip list enforcement (`default-skiplist.yaml`) | `ddinjector_x64.dll` is NOT in `datadogagent.exe`, `trace-agent.exe`, `lsass.exe`, etc. |
+| `dd-lifecycle-enabledisable` | Enable → Disable → Re-enable SSI cycle via `apm instrument host` / `apm uninstrument host` | DLL present after enable, absent after disable, present again after re-enable |
+| `dd-java-double-inject-prevention` | Double injection prevention (`java.c` JAVA_TOOL_OPTIONS check) | Pre-existing `-javaagent` in `JAVA_TOOL_OPTIONS` → SSI does not add a second one |
+
+### Coverage Matrix
+
+| Scenario | Covered? | App |
+|----------|----------|-----|
+| .NET via NSSM | ✅ | `dd-dog-runner` |
+| Java via NSSM | ✅ | `dd-dog-runner` |
+| .NET via IIS (w3wp.exe) | ✅ | `dd-dotnet-iis` |
+| Java via Apache Procrun (prunsrv.exe) | ✅ | `dd-java-procrun` |
+| .NET via sc.exe (native service) | ✅ | `dd-dotnet-native-svc` |
+| Java via Tomcat 9 (tomcat9.exe) | ✅ | `dd-java-tomcat` |
+| .NET 8 self-contained single-file (PE bundle sig) | ✅ | `dd-dotnet-selfcontained` |
+| .NET Framework 4.8 (PE COM descriptor) | ✅ | `dd-dotnet-framework` |
+| Skip list enforcement | ✅ | `dd-skiplist-negative` |
+| Enable/disable lifecycle | ✅ | `dd-lifecycle-enabledisable` |
+| Double injection prevention | ✅ | `dd-java-double-inject-prevention` |
+| Java via WebLogic (wlsvc.exe) | ⬜ | Planned |
+| 32-bit (x86) process injection | ⬜ | Planned |
+| JVM skip list (Kafka, Cassandra) | ⬜ | Planned |
 
 ---
 
