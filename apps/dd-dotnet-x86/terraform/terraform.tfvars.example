@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and fill in the values.
+# NEVER commit terraform.tfvars — it may contain secrets.
+
+aws_region          = "us-east-1"
+instance_type       = "t3.medium"
+key_name            = "my-key-pair"
+vpc_id              = "vpc-xxxxxxxxxxxxxxxxx"
+subnet_id           = "subnet-xxxxxxxxxxxxxxxxx"
+allowed_cidr_blocks = ["10.0.0.0/8"]
+
+# Datadog
+dd_api_key    = "YOUR_DD_API_KEY"
+dd_site       = "datadoghq.com"
+install_agent = true

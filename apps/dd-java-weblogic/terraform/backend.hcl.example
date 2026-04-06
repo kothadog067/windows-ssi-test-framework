@@ -1,0 +1,9 @@
+# Copy this file to backend.hcl and fill in your S3 backend details.
+# Then initialise with: terraform init -backend-config=backend.hcl
+# NEVER commit backend.hcl if it contains sensitive values.
+
+bucket         = "your-terraform-state-bucket"
+key            = "ssi-tests/dd-java-weblogic/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "terraform-state-lock"
+encrypt        = true

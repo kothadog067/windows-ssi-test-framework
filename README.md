@@ -34,7 +34,10 @@ windows-ssi-test-framework/
     ├── dd-dotnet-framework/          ← .NET Framework 4.8 (PE COM descriptor)
     ├── dd-skiplist-negative/         ← Negative: skip-listed processes NOT instrumented
     ├── dd-lifecycle-enabledisable/   ← Enable/disable SSI lifecycle (apm instrument/uninstrument)
-    └── dd-java-double-inject-prevention/ ← Java double injection prevention
+    ├── dd-java-double-inject-prevention/ ← Java double injection prevention
+    ├── dd-java-weblogic/               ← Java via wlsvc.exe (WebLogic service wrapper)
+    ├── dd-dotnet-x86/                  ← 32-bit (x86) process injection (ddinjector_x86.dll)
+    └── dd-jvm-skiplist-kafka/          ← JVM skip list: Kafka must NOT be instrumented
 ```
 
 Every app under `apps/` has the **same external shape**:
@@ -235,6 +238,8 @@ make destroy-all AWS_REGION=us-east-1
 | `dd-java-tomcat` | Java 21 / Tomcat 9 | Tomcat Windows service | 8085 | Tomcat service env | `tomcat9.exe` (`is_tomcat_exe`) |
 | `dd-dotnet-selfcontained` | .NET 8 single-file | sc.exe | 8086 | Registry env | `DotnetSelfContained.exe` (PE bundle sig) |
 | `dd-dotnet-framework` | .NET Framework 4.8 | NSSM | 8087 | NSSM env vars | `DotnetFramework.exe` (PE COM descriptor) |
+| `dd-java-weblogic` | Java 21 | wlsvc.exe (Procrun renamed) | 8090 | Service env | `wlsvc.exe` (`is_weblogic_service`) |
+| `dd-dotnet-x86` | .NET 8 win-x86 | sc.exe (32-bit) | 8091 | Registry env | `DotnetX86App.exe` (PE bundle, x86 → `ddinjector_x86.dll`) |
 
 ### Negative / Edge-Case Tests
 
@@ -243,6 +248,7 @@ make destroy-all AWS_REGION=us-east-1
 | `dd-skiplist-negative` | Skip list enforcement (`default-skiplist.yaml`) | `ddinjector_x64.dll` is NOT in `datadogagent.exe`, `trace-agent.exe`, `lsass.exe`, etc. |
 | `dd-lifecycle-enabledisable` | Enable → Disable → Re-enable SSI cycle via `apm instrument host` / `apm uninstrument host` | DLL present after enable, absent after disable, present again after re-enable |
 | `dd-java-double-inject-prevention` | Double injection prevention (`java.c` JAVA_TOOL_OPTIONS check) | Pre-existing `-javaagent` in `JAVA_TOOL_OPTIONS` → SSI does not add a second one |
+| `dd-jvm-skiplist-kafka` | JVM workload skip list (`workload_selection_hardcoded.json`) | `ddinjector_x64.dll` is NOT loaded in `java.exe` running `kafka.Kafka` |
 
 ### Coverage Matrix
 
@@ -259,9 +265,9 @@ make destroy-all AWS_REGION=us-east-1
 | Skip list enforcement | ✅ | `dd-skiplist-negative` |
 | Enable/disable lifecycle | ✅ | `dd-lifecycle-enabledisable` |
 | Double injection prevention | ✅ | `dd-java-double-inject-prevention` |
-| Java via WebLogic (wlsvc.exe) | ⬜ | Planned |
-| 32-bit (x86) process injection | ⬜ | Planned |
-| JVM skip list (Kafka, Cassandra) | ⬜ | Planned |
+| Java via WebLogic (wlsvc.exe) | ✅ | `dd-java-weblogic` |
+| 32-bit (x86) process injection | ✅ | `dd-dotnet-x86` |
+| JVM skip list (Kafka, Cassandra) | ✅ | `dd-jvm-skiplist-kafka` |
 
 ---
 
