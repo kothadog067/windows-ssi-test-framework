@@ -1,0 +1,1292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DD Runner — Datadog SSI Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --dd-purple: #632CA6;
+    --dd-orange: #FF6B2B;
+    --dd-green: #05c875;
+    --dd-red: #e84040;
+    --bg: #0a0a0f;
+    --surface: #13131a;
+    --border: #2a2a3a;
+    --text: #e8e8f0;
+    --muted: #6b6b8a;
+    --java-color: #f89820;
+    --dotnet-color: #512bd4;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  header {
+    width: 100%;
+    max-width: 900px;
+    padding: 20px 24px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .logo {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 13px;
+    color: var(--dd-purple);
+    text-shadow: 0 0 20px rgba(99,44,166,0.6);
+    letter-spacing: 1px;
+  }
+
+  .logo span { color: var(--dd-orange); }
+
+  .service-badges {
+    display: flex;
+    gap: 10px;
+  }
+
+  .badge {
+    font-size: 9px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .badge.dotnet {
+    background: rgba(81,43,212,0.2);
+    border: 1px solid var(--dotnet-color);
+    color: #a78bfa;
+  }
+
+  .badge.java {
+    background: rgba(248,152,32,0.15);
+    border: 1px solid var(--java-color);
+    color: var(--java-color);
+  }
+
+  .badge .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 5px;
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  .badge.dotnet .dot { background: #a78bfa; box-shadow: 0 0 6px #a78bfa; }
+  .badge.java .dot { background: var(--java-color); box-shadow: 0 0 6px var(--java-color); }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .main {
+    width: 100%;
+    max-width: 900px;
+    padding: 20px 24px;
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 20px;
+  }
+
+  /* ---- GAME AREA ---- */
+  .game-section { display: flex; flex-direction: column; gap: 12px; }
+
+  .score-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .score-label {
+    font-size: 9px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+
+  .score-value {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 16px;
+    color: var(--dd-green);
+    text-shadow: 0 0 12px rgba(5,200,117,0.5);
+    min-width: 80px;
+    text-align: right;
+  }
+
+  .hi-value {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  #gameCanvas {
+    width: 100%;
+    height: 200px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    display: block;
+    image-rendering: pixelated;
+  }
+
+  .game-msg {
+    text-align: center;
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px;
+    transition: color 0.2s;
+  }
+
+  .game-msg.active { color: var(--dd-orange); }
+
+  /* Speed indicator */
+  .speed-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .speed-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--dd-purple), var(--dd-orange));
+    border-radius: 2px;
+    transition: width 0.5s ease;
+    box-shadow: 0 0 8px var(--dd-orange);
+    width: 10%;
+  }
+
+  .speed-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8px;
+    color: var(--muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* APM Trace panel */
+  .trace-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    margin-top: 4px;
+  }
+
+  .trace-title {
+    font-size: 8px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trace-title span {
+    float: right;
+    color: var(--dd-green);
+    animation: blink 1.5s step-end infinite;
+  }
+
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  .trace-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 8px;
+  }
+
+  .trace-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 8px;
+  }
+
+  .trace-service {
+    min-width: 55px;
+    color: var(--muted);
+  }
+
+  .trace-bar-wrap {
+    flex: 1;
+    height: 10px;
+    background: var(--bg);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .trace-bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .trace-bar.dotnet { background: var(--dotnet-color); box-shadow: 0 0 6px rgba(81,43,212,0.5); }
+  .trace-bar.java { background: var(--java-color); box-shadow: 0 0 6px rgba(248,152,32,0.4); }
+
+  .trace-ms {
+    min-width: 30px;
+    text-align: right;
+    color: var(--text);
+    font-size: 8px;
+  }
+
+  /* ---- LEADERBOARD PANEL ---- */
+  .sidebar { display: flex; flex-direction: column; gap: 14px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .panel-title {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text);
+  }
+
+  .panel-tag {
+    font-size: 8px;
+    color: var(--java-color);
+    background: rgba(248,152,32,0.1);
+    border: 1px solid rgba(248,152,32,0.3);
+    padding: 2px 6px;
+    border-radius: 2px;
+  }
+
+  .leaderboard-list {
+    list-style: none;
+    padding: 8px 0;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .leaderboard-list::-webkit-scrollbar { width: 3px; }
+  .leaderboard-list::-webkit-scrollbar-track { background: transparent; }
+  .leaderboard-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .lb-item {
+    display: flex;
+    align-items: center;
+    padding: 7px 14px;
+    gap: 10px;
+    transition: background 0.15s;
+  }
+
+  .lb-item:hover { background: rgba(255,255,255,0.03); }
+
+  .lb-rank {
+    font-size: 8px;
+    color: var(--muted);
+    min-width: 16px;
+    font-family: 'Press Start 2P', monospace;
+  }
+
+  .lb-rank.gold { color: #ffd700; text-shadow: 0 0 8px rgba(255,215,0,0.5); }
+  .lb-rank.silver { color: #c0c0c0; }
+  .lb-rank.bronze { color: #cd7f32; }
+
+  .lb-name {
+    flex: 1;
+    font-size: 9px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lb-score {
+    font-size: 9px;
+    color: var(--dd-green);
+    font-family: 'Press Start 2P', monospace;
+    text-shadow: 0 0 6px rgba(5,200,117,0.4);
+  }
+
+  .lb-empty {
+    padding: 20px 14px;
+    font-size: 8px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.8;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* Score submit form */
+  .submit-form {
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .submit-form label {
+    font-size: 8px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .submit-form input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    padding: 7px 10px;
+    border-radius: 3px;
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+
+  .submit-form input:focus { border-color: var(--dd-purple); }
+
+  .submit-btn {
+    background: var(--dd-purple);
+    color: white;
+    border: none;
+    padding: 8px;
+    border-radius: 3px;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 8px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+    letter-spacing: 1px;
+  }
+
+  .submit-btn:hover {
+    background: #7c3fd4;
+    box-shadow: 0 0 14px rgba(99,44,166,0.5);
+  }
+
+  .submit-btn:active { transform: scale(0.97); }
+  .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .submit-result {
+    font-size: 8px;
+    text-align: center;
+    min-height: 12px;
+    transition: color 0.3s;
+  }
+
+  /* Service status */
+  .status-grid {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 9px;
+  }
+
+  .status-name { color: var(--muted); }
+
+  .status-pill {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 8px;
+    letter-spacing: 1px;
+  }
+
+  .status-pill.up {
+    background: rgba(5,200,117,0.15);
+    color: var(--dd-green);
+    border: 1px solid rgba(5,200,117,0.3);
+  }
+
+  .status-pill.down {
+    background: rgba(232,64,64,0.15);
+    color: var(--dd-red);
+    border: 1px solid rgba(232,64,64,0.3);
+  }
+
+  .status-pill.checking {
+    background: rgba(107,107,138,0.15);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    animation: blink 1.5s step-end infinite;
+  }
+
+  /* Game over overlay */
+  #gameOverlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10,10,15,0.88);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border-radius: 4px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+
+  #gameOverlay.show {
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  .overlay-title {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 14px;
+    color: var(--dd-orange);
+    text-shadow: 0 0 20px rgba(255,107,43,0.7);
+    animation: shake 0.4s ease;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-4px); }
+    40% { transform: translateX(4px); }
+    60% { transform: translateX(-3px); }
+    80% { transform: translateX(3px); }
+  }
+
+  .overlay-score {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 11px;
+    color: var(--dd-green);
+  }
+
+  .overlay-hint {
+    font-size: 8px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-top: 6px;
+  }
+
+  .canvas-wrap { position: relative; }
+
+  footer {
+    margin-top: auto;
+    padding: 16px;
+    font-size: 8px;
+    color: var(--muted);
+    text-align: center;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  footer span { color: var(--dd-purple); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">DD<span>Runner</span></div>
+  <div class="service-badges">
+    <div class="badge dotnet"><span class="dot"></span>.NET :8080</div>
+    <div class="badge java"><span class="dot"></span>Java :8081</div>
+  </div>
+</header>
+
+<div class="main">
+  <!-- LEFT: Game -->
+  <div class="game-section">
+    <div class="score-bar">
+      <div>
+        <div class="score-label">Score</div>
+        <div class="score-value" id="scoreDisplay">0</div>
+      </div>
+      <div style="text-align:center">
+        <div class="score-label">Speed</div>
+        <div id="speedDisplay" style="font-family:'Press Start 2P',monospace;font-size:11px;color:var(--dd-orange)">1x</div>
+      </div>
+      <div style="text-align:right">
+        <div class="score-label">Best</div>
+        <div class="hi-value" id="hiDisplay">0</div>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <canvas id="gameCanvas" width="856" height="200" tabindex="0"></canvas>
+      <div id="gameOverlay">
+        <div class="overlay-title">GAME OVER</div>
+        <div class="overlay-score" id="overlayScore">Score: 0</div>
+        <div class="overlay-hint">SPACE / TAP to restart</div>
+      </div>
+    </div>
+
+    <div class="game-msg" id="gameMsg">PRESS SPACE OR TAP TO START</div>
+
+    <div class="speed-bar">
+      <div class="speed-fill" id="speedFill"></div>
+    </div>
+    <div class="speed-label">
+      <span>Injection Speed</span>
+      <span id="speedPct">10%</span>
+    </div>
+
+    <!-- Live APM Trace panel -->
+    <div class="trace-panel">
+      <div class="trace-title">
+        APM Traces (simulated)
+        <span>● LIVE</span>
+      </div>
+      <div class="trace-item">
+        <div class="trace-row">
+          <div class="trace-service" style="color:#a78bfa">.NET</div>
+          <div class="trace-bar-wrap">
+            <div class="trace-bar dotnet" id="traceDotnet" style="width:65%"></div>
+          </div>
+          <div class="trace-ms" id="traceDotnetMs">12ms</div>
+        </div>
+      </div>
+      <div class="trace-item">
+        <div class="trace-row">
+          <div class="trace-service" style="color:var(--java-color)">Java</div>
+          <div class="trace-bar-wrap">
+            <div class="trace-bar java" id="traceJava" style="width:30%"></div>
+          </div>
+          <div class="trace-ms" id="traceJavaMs">5ms</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Sidebar -->
+  <div class="sidebar">
+
+    <!-- Leaderboard -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Leaderboard</div>
+        <div class="panel-tag">Java API</div>
+      </div>
+      <ul class="leaderboard-list" id="lbList">
+        <li class="lb-empty">No scores yet.<br>Be the first!</li>
+      </ul>
+      <div class="submit-form" id="submitForm" style="display:none">
+        <label for="nameInput">Your name</label>
+        <input id="nameInput" type="text" maxlength="16" placeholder="PLAYER_01" autocomplete="off" />
+        <button class="submit-btn" id="submitBtn" onclick="submitScore()">Submit Score</button>
+        <div class="submit-result" id="submitResult"></div>
+      </div>
+    </div>
+
+    <!-- Service Status -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Services</div>
+      </div>
+      <div class="status-grid">
+        <div class="status-row">
+          <div class="status-name">.NET Game Server</div>
+          <div class="status-pill up" id="dotnetStatus">UP</div>
+        </div>
+        <div class="status-row">
+          <div class="status-name">Java Leaderboard</div>
+          <div class="status-pill checking" id="javaStatus">CHECKING</div>
+        </div>
+        <div class="status-row">
+          <div class="status-name">DD Agent SSI</div>
+          <div class="status-pill checking" id="ssiStatus">CHECKING</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Controls</div>
+      </div>
+      <div class="status-grid" style="gap:6px">
+        <div class="status-row"><span class="status-name">Jump</span><span style="font-size:9px;color:var(--text)">SPACE / ↑ / Tap</span></div>
+        <div class="status-row"><span class="status-name">Duck</span><span style="font-size:9px;color:var(--text)">↓ / S</span></div>
+        <div class="status-row"><span class="status-name">Restart</span><span style="font-size:9px;color:var(--text)">SPACE</span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<footer>
+  <span>.NET</span> Game Server :8080 &nbsp;·&nbsp; <span>Java</span> Leaderboard :8081 &nbsp;·&nbsp; Datadog SSI Demo
+</footer>
+
+<script>
+// =====================================================================
+//  CONFIG
+// =====================================================================
+const JAVA_API = 'http://localhost:8081';
+
+// =====================================================================
+//  GAME ENGINE
+// =====================================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const W = canvas.width;
+const H = canvas.height;
+const GROUND = H - 30;
+const DINO_W = 40, DINO_H = 48;
+const DINO_X = 70;
+
+// Colors
+const C = {
+  bg: '#13131a',
+  ground: '#2a2a3a',
+  groundLine: '#3a3a5a',
+  dino: '#632CA6',
+  dinoEye: '#ffffff',
+  dinoHighlight: '#8b5cf6',
+  cactus: '#05c875',
+  cactusShad: '#038c52',
+  bird: '#FF6B2B',
+  cloud: '#1e1e2e',
+  score: '#05c875',
+  stars: '#3a3a5a',
+  gameover: '#FF6B2B',
+  particle: '#FF6B2B',
+};
+
+let state = 'idle'; // idle | running | dead
+let score = 0;
+let hiScore = 0;
+let frame = 0;
+let speed = 5;
+let framesSinceObstacle = 0;
+let minGap = 60;
+
+// Dino state
+let dino = {
+  y: GROUND - DINO_H,
+  vy: 0,
+  ducking: false,
+  jumpCount: 0,
+  legFrame: 0,
+};
+
+const GRAVITY = 0.55;
+const JUMP_V = -13;
+const MAX_JUMPS = 2;
+
+// Obstacles
+let obstacles = [];
+// Clouds
+let clouds = [
+  { x: 200, y: 40, w: 80 },
+  { x: 500, y: 25, w: 60 },
+  { x: 750, y: 55, w: 70 },
+];
+// Stars
+let stars = Array.from({ length: 40 }, () => ({
+  x: Math.random() * W,
+  y: Math.random() * (GROUND - 60),
+  r: Math.random() * 1.5 + 0.3,
+  twinkle: Math.random() * Math.PI * 2,
+}));
+// Particles
+let particles = [];
+
+function jump() {
+  if (state === 'idle') { state = 'running'; updateMsg(''); return; }
+  if (state === 'dead') { resetGame(); return; }
+  if (dino.jumpCount < MAX_JUMPS) {
+    dino.vy = JUMP_V;
+    dino.jumpCount++;
+    spawnParticles(DINO_X + DINO_W / 2, dino.y + DINO_H, '#8b5cf6', 6);
+  }
+}
+
+function duck(on) {
+  if (state !== 'running') return;
+  dino.ducking = on;
+}
+
+function resetGame() {
+  score = 0;
+  speed = 5;
+  frame = 0;
+  framesSinceObstacle = 0;
+  obstacles = [];
+  particles = [];
+  dino.y = GROUND - DINO_H;
+  dino.vy = 0;
+  dino.ducking = false;
+  dino.jumpCount = 0;
+  state = 'running';
+  document.getElementById('gameOverlay').classList.remove('show');
+  updateMsg('');
+  hideSubmitForm();
+}
+
+function spawnParticles(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 4,
+      vy: (Math.random() - 1) * 4,
+      life: 1,
+      color,
+      r: Math.random() * 3 + 1,
+    });
+  }
+}
+
+function spawnObstacle() {
+  const types = ['cactus_s', 'cactus_l', 'cactus_xl', 'bird'];
+  const w = Math.random();
+  let type;
+  if (w < 0.35) type = 'cactus_s';
+  else if (w < 0.65) type = 'cactus_l';
+  else if (w < 0.80) type = 'cactus_xl';
+  else type = 'bird';
+
+  const birdY = type === 'bird' ? GROUND - DINO_H - (Math.random() > 0.5 ? 30 : 0) - 20 : 0;
+  obstacles.push({ type, x: W + 20, y: birdY, wingUp: false, wFrame: 0 });
+  framesSinceObstacle = 0;
+}
+
+function getObstacleRect(o) {
+  switch (o.type) {
+    case 'cactus_s':  return { x: o.x + 4, y: GROUND - 38, w: 20, h: 38 };
+    case 'cactus_l':  return { x: o.x + 4, y: GROUND - 52, w: 22, h: 52 };
+    case 'cactus_xl': return { x: o.x + 4, y: GROUND - 60, w: 30, h: 60 };
+    case 'bird':      return { x: o.x + 4, y: o.y + 6, w: 32, h: 20 };
+    default:          return { x: o.x, y: 0, w: 0, h: 0 };
+  }
+}
+
+function getDinoRect() {
+  if (dino.ducking) return { x: DINO_X + 4, y: dino.y + 20, w: DINO_W - 8, h: DINO_H - 20 };
+  return { x: DINO_X + 6, y: dino.y + 4, w: DINO_W - 12, h: DINO_H - 4 };
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// =====================================================================
+//  DRAW FUNCTIONS
+// =====================================================================
+function drawBackground() {
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars twinkle
+  stars.forEach(s => {
+    s.twinkle += 0.05;
+    ctx.globalAlpha = 0.3 + 0.4 * Math.abs(Math.sin(s.twinkle));
+    ctx.fillStyle = C.stars;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawGround() {
+  // Ground fill
+  ctx.fillStyle = C.ground;
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+  // Top line
+  ctx.strokeStyle = C.groundLine;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND);
+  ctx.lineTo(W, GROUND);
+  ctx.stroke();
+  // Ground texture dashes
+  ctx.strokeStyle = '#1e1e2e';
+  ctx.lineWidth = 1;
+  for (let x = (frame * speed) % 30; x < W; x += 30) {
+    ctx.beginPath();
+    ctx.moveTo(x, GROUND + 8);
+    ctx.lineTo(x + 12, GROUND + 8);
+    ctx.stroke();
+  }
+}
+
+function drawClouds() {
+  clouds.forEach(c => {
+    ctx.fillStyle = C.cloud;
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y, c.w / 2, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(c.x - 15, c.y + 5, c.w / 3, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(c.x + 18, c.y + 5, c.w / 3.5, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawDino() {
+  const x = DINO_X;
+  const y = dino.ducking ? dino.y + 20 : dino.y;
+  const h = dino.ducking ? DINO_H - 20 : DINO_H;
+  const w = DINO_W;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(99,44,166,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, GROUND + 4, w / 2, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = C.dino;
+  const bodyY = dino.ducking ? y : y + 8;
+  const bodyH = dino.ducking ? h : h - 20;
+  ctx.beginPath();
+  ctx.roundRect(x + 5, bodyY, w - 10, bodyH, 6);
+  ctx.fill();
+
+  if (!dino.ducking) {
+    // Head
+    ctx.fillStyle = C.dinoHighlight;
+    ctx.beginPath();
+    ctx.roundRect(x + 8, y, w - 10, 22, 5);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = C.dinoEye;
+    ctx.beginPath();
+    ctx.arc(x + w - 8, y + 8, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#632CA6';
+    ctx.beginPath();
+    ctx.arc(x + w - 7, y + 8, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Legs
+    const lf = Math.floor(dino.legFrame / 6) % 2;
+    ctx.fillStyle = C.dino;
+    if (dino.jumpCount > 0) {
+      // Tucked legs
+      ctx.fillRect(x + 8, y + h - 10, 8, 8);
+      ctx.fillRect(x + 22, y + h - 8, 8, 8);
+    } else {
+      if (lf === 0) {
+        ctx.fillRect(x + 8, y + h - 14, 8, 14);
+        ctx.fillRect(x + 22, y + h - 8, 8, 8);
+      } else {
+        ctx.fillRect(x + 8, y + h - 8, 8, 8);
+        ctx.fillRect(x + 22, y + h - 14, 8, 14);
+      }
+    }
+  }
+
+  // DD logo on back
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.font = 'bold 9px Share Tech Mono';
+  ctx.fillText('DD', x + 9, dino.ducking ? y + 16 : y + 24);
+}
+
+function drawCactus(o) {
+  const heights = { cactus_s: 38, cactus_l: 52, cactus_xl: 60 };
+  const widths = { cactus_s: 20, cactus_l: 22, cactus_xl: 30 };
+  const ch = heights[o.type];
+  const cw = widths[o.type];
+  const cx = o.x;
+  const cy = GROUND - ch;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(5,200,117,0.1)';
+  ctx.beginPath();
+  ctx.ellipse(cx + cw / 2, GROUND + 3, cw * 0.8, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Main body
+  ctx.fillStyle = C.cactusShad;
+  ctx.fillRect(cx + 2, cy + 4, cw - 4, ch - 4);
+  ctx.fillStyle = C.cactus;
+  ctx.fillRect(cx, cy, cw - 4, ch);
+
+  // Arms
+  if (o.type !== 'cactus_s') {
+    const armH = o.type === 'cactus_xl' ? 20 : 15;
+    ctx.fillStyle = C.cactus;
+    ctx.fillRect(cx - 10, cy + ch * 0.3, 10, 6);
+    ctx.fillRect(cx - 10, cy + ch * 0.3 - armH, 6, armH);
+    ctx.fillRect(cx + cw - 2, cy + ch * 0.45, 10, 6);
+    ctx.fillRect(cx + cw + 4, cy + ch * 0.45 - armH * 0.7, 6, armH * 0.7);
+  }
+  // Pixel highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(cx + 2, cy, 3, ch * 0.5);
+}
+
+function drawBird(o) {
+  o.wFrame++;
+  if (o.wFrame % 12 === 0) o.wingUp = !o.wingUp;
+  const bx = o.x, by = o.y;
+  ctx.fillStyle = C.bird;
+  // Body
+  ctx.beginPath();
+  ctx.ellipse(bx + 20, by + 16, 16, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Wings
+  if (o.wingUp) {
+    ctx.beginPath();
+    ctx.moveTo(bx + 10, by + 12);
+    ctx.lineTo(bx + 22, by);
+    ctx.lineTo(bx + 34, by + 12);
+    ctx.closePath();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(bx + 10, by + 20);
+    ctx.lineTo(bx + 22, by + 30);
+    ctx.lineTo(bx + 34, by + 20);
+    ctx.closePath();
+  }
+  ctx.fill();
+  // Beak
+  ctx.fillStyle = '#ffd700';
+  ctx.beginPath();
+  ctx.moveTo(bx + 36, by + 14);
+  ctx.lineTo(bx + 44, by + 16);
+  ctx.lineTo(bx + 36, by + 18);
+  ctx.closePath();
+  ctx.fill();
+  // Eye
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(bx + 30, by + 13, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(bx + 31, by + 13, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawScore() {
+  ctx.font = 'bold 14px "Press Start 2P", monospace';
+  ctx.fillStyle = C.score;
+  ctx.fillText(String(score).padStart(5, '0'), W - 100, 26);
+}
+
+function drawIdleScreen() {
+  ctx.font = '10px "Press Start 2P", monospace';
+  ctx.fillStyle = '#632CA6';
+  ctx.textAlign = 'center';
+  ctx.fillText('SPACE / TAP TO START', W / 2, GROUND / 2);
+  ctx.textAlign = 'left';
+}
+
+// =====================================================================
+//  GAME LOOP
+// =====================================================================
+function update() {
+  if (state !== 'running') return;
+
+  frame++;
+  score = Math.floor(frame / 6);
+  if (score > hiScore) hiScore = score;
+
+  // Speed ramp
+  speed = 5 + Math.floor(score / 200) * 0.8;
+  speed = Math.min(speed, 14);
+
+  // UI updates
+  document.getElementById('scoreDisplay').textContent = score;
+  document.getElementById('hiDisplay').textContent = hiScore;
+  const pct = Math.min(100, Math.round(((speed - 5) / 9) * 100) + 10);
+  document.getElementById('speedFill').style.width = pct + '%';
+  document.getElementById('speedPct').textContent = pct + '%';
+  document.getElementById('speedDisplay').textContent = speed.toFixed(1) + 'x';
+
+  // Dino physics
+  if (dino.ducking && dino.y < GROUND - 28) {
+    dino.vy += GRAVITY * 2;
+  } else {
+    dino.vy += GRAVITY;
+  }
+  dino.y += dino.vy;
+  if (dino.y >= GROUND - DINO_H) {
+    dino.y = GROUND - DINO_H;
+    dino.vy = 0;
+    dino.jumpCount = 0;
+  }
+  if (state === 'running') dino.legFrame++;
+
+  // Clouds
+  clouds.forEach(c => {
+    c.x -= speed * 0.3;
+    if (c.x < -100) { c.x = W + 80; c.y = 20 + Math.random() * 50; }
+  });
+
+  // Stars move slowly
+  stars.forEach(s => {
+    s.x -= speed * 0.05;
+    if (s.x < 0) s.x = W;
+  });
+
+  // Obstacles
+  minGap = Math.max(35, 80 - Math.floor(score / 100) * 3);
+  framesSinceObstacle++;
+  const spawnGap = Math.max(minGap, 90 - Math.floor(speed) * 3);
+  if (framesSinceObstacle > spawnGap && obstacles.length < 3) spawnObstacle();
+
+  obstacles.forEach(o => { o.x -= speed; });
+  obstacles = obstacles.filter(o => o.x > -80);
+
+  // Collision
+  const dr = getDinoRect();
+  for (const o of obstacles) {
+    if (rectsOverlap(dr, getObstacleRect(o))) {
+      die();
+      return;
+    }
+  }
+
+  // Particles
+  particles.forEach(p => {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.2;
+    p.life -= 0.05;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  // Simulated APM trace values
+  if (frame % 30 === 0) {
+    const dotnetMs = Math.floor(8 + Math.random() * 20 + speed * 0.5);
+    const javaMs = Math.floor(3 + Math.random() * 10);
+    const dotnetPct = Math.min(95, dotnetMs * 4);
+    const javaPct = Math.min(60, javaMs * 5);
+    document.getElementById('traceDotnet').style.width = dotnetPct + '%';
+    document.getElementById('traceDotnetMs').textContent = dotnetMs + 'ms';
+    document.getElementById('traceJava').style.width = javaPct + '%';
+    document.getElementById('traceJavaMs').textContent = javaMs + 'ms';
+  }
+}
+
+function die() {
+  state = 'dead';
+  spawnParticles(DINO_X + DINO_W / 2, dino.y + DINO_H / 2, C.particle, 20);
+  document.getElementById('overlayScore').textContent = 'Score: ' + score;
+  document.getElementById('gameOverlay').classList.add('show');
+  document.getElementById('gameMsg').textContent = '';
+  showSubmitForm();
+}
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+  drawClouds();
+  drawGround();
+  drawParticles();
+  drawDino();
+  obstacles.forEach(o => {
+    if (o.type === 'bird') drawBird(o);
+    else drawCactus(o);
+  });
+  if (state === 'idle') drawIdleScreen();
+  drawScore();
+}
+
+function loop() {
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+
+function updateMsg(msg) {
+  const el = document.getElementById('gameMsg');
+  el.textContent = msg;
+  el.classList.toggle('active', msg !== '');
+}
+
+// =====================================================================
+//  INPUT
+// =====================================================================
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+    e.preventDefault();
+    jump();
+  }
+  if (e.code === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+    e.preventDefault();
+    duck(true);
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowDown' || e.key === 's' || e.key === 'S') duck(false);
+});
+canvas.addEventListener('click', () => jump());
+canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, { passive: false });
+
+// =====================================================================
+//  LEADERBOARD (Java API)
+// =====================================================================
+let currentScore = 0;
+
+function showSubmitForm() {
+  currentScore = score;
+  const form = document.getElementById('submitForm');
+  form.style.display = 'flex';
+  document.getElementById('submitResult').textContent = '';
+  document.getElementById('submitBtn').disabled = false;
+}
+
+function hideSubmitForm() {
+  document.getElementById('submitForm').style.display = 'none';
+}
+
+async function submitScore() {
+  const nameEl = document.getElementById('nameInput');
+  const resultEl = document.getElementById('submitResult');
+  const btn = document.getElementById('submitBtn');
+  const name = nameEl.value.trim() || 'PLAYER_01';
+
+  btn.disabled = true;
+  resultEl.style.color = 'var(--muted)';
+  resultEl.textContent = 'Submitting...';
+
+  try {
+    const res = await fetch(`${JAVA_API}/score`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, score: currentScore }),
+    });
+    if (res.ok) {
+      resultEl.style.color = 'var(--dd-green)';
+      resultEl.textContent = '✓ Score saved!';
+      await loadLeaderboard();
+    } else {
+      throw new Error('Server error');
+    }
+  } catch {
+    resultEl.style.color = 'var(--dd-orange)';
+    resultEl.textContent = '⚠ Java service offline';
+    updateJavaStatus(false);
+  }
+}
+
+async function loadLeaderboard() {
+  try {
+    const res = await fetch(`${JAVA_API}/leaderboard`);
+    const data = await res.json();
+    updateJavaStatus(true);
+    renderLeaderboard(data);
+  } catch {
+    updateJavaStatus(false);
+  }
+}
+
+function renderLeaderboard(data) {
+  const list = document.getElementById('lbList');
+  if (!data || data.length === 0) {
+    list.innerHTML = '<li class="lb-empty">No scores yet.<br>Be the first!</li>';
+    return;
+  }
+  const rankClass = ['gold', 'silver', 'bronze'];
+  list.innerHTML = data.map((e, i) => `
+    <li class="lb-item">
+      <div class="lb-rank ${rankClass[i] || ''}">${i + 1}</div>
+      <div class="lb-name">${e.name}</div>
+      <div class="lb-score">${e.score}</div>
+    </li>
+  `).join('');
+}
+
+function updateJavaStatus(up) {
+  const el = document.getElementById('javaStatus');
+  el.className = 'status-pill ' + (up ? 'up' : 'down');
+  el.textContent = up ? 'UP' : 'DOWN';
+
+  const ssi = document.getElementById('ssiStatus');
+  if (up) {
+    ssi.className = 'status-pill up';
+    ssi.textContent = 'INJECTED';
+  }
+}
+
+// Health check loop
+async function checkServices() {
+  // Java health
+  try {
+    const r = await fetch(`${JAVA_API}/health`, { signal: AbortSignal.timeout(2000) });
+    updateJavaStatus(r.ok);
+  } catch {
+    updateJavaStatus(false);
+  }
+}
+
+// =====================================================================
+//  INIT
+// =====================================================================
+loop();
+loadLeaderboard();
+setInterval(checkServices, 10000);
+setTimeout(checkServices, 1000);
+</script>
+</body>
+</html>
