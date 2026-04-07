@@ -286,7 +286,7 @@ This generates the complete directory structure with pre-populated script templa
 | Requirement | Version |
 |------------|---------|
 | Datadog Agent | v7.67.1+ |
-| Windows Server | 2019 / 2022 / 2025 |
+| Windows Server | 2019 / 2022 / 2025 (all covered) |
 | .NET Tracer (SSI) | v3.19.0+ |
 | Java Tracer (SSI) | v1.44.0+ |
 | Windows Host-Wide Preview | Must be enrolled |
