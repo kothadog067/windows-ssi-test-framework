@@ -712,4 +712,12 @@ echo "  JUnit  : $JUNIT_XML"
 echo "  Logs   : $RESULTS_DIR/<app>/logs/"
 echo "========================================================"
 
+# ---------------------------------------------------------------------------
+# 16. Consolidated check-level dashboard
+# ---------------------------------------------------------------------------
+if [[ -f "$REPO_ROOT/scripts/show_results.sh" ]]; then
+    echo ""
+    bash "$REPO_ROOT/scripts/show_results.sh" "$RESULTS_DIR" || true
+fi
+
 exit $overall_failed

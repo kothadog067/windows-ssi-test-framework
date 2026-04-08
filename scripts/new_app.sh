@@ -140,13 +140,6 @@ sed -i '' "s/__APP_NAME__/$APP_NAME/g" "$APP_DIR/scripts/setup.ps1"
 
 # ── verify.ps1 ────────────────────────────────────────────────────────────────
 cat > "$APP_DIR/scripts/verify.ps1" <<'VERIFY'
-# =============================================================================
-#  __APP_NAME__ — Verify Script
-#  Standard interface: verify.ps1 [-TargetHost <ip>] [-DDApiKey <key>]
-#                                  [-DDSite <site>] [-WaitForTracesSec <n>]
-#  Exit 0 = all checks pass, Exit 1 = one or more checks failed.
-# =============================================================================
-
 param(
     [string]$TargetHost       = "localhost",
     [string]$DDApiKey         = $env:DD_API_KEY,
@@ -155,33 +148,47 @@ param(
     [int]   $WaitForTracesSec = 60
 )
 
+Import-Module "$PSScriptRoot\..\..\scripts\verify_common.psm1" -Force
+
 $ErrorActionPreference = "Continue"
-$scriptStart           = Get-Date
-$failed                = 0
+$scriptStart = Get-Date
+$failed      = 0
+$results     = New-ResultsObject -TargetHost $TargetHost
 
-function Write-Ok($m)   { Write-Host "  [OK]   $m" -ForegroundColor Green }
-function Write-Fail($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; $script:failed++ }
-function Write-Warn($m) { Write-Host "  [WARN] $m" -ForegroundColor Yellow }
-
-# ── TODO: Windows service status check ───────────────────────────────────────
-# $svc = Get-Service -Name "YourServiceName" -ErrorAction SilentlyContinue
-# if ($svc -and $svc.Status -eq "Running") { Write-Ok "Service RUNNING" }
-# else { Write-Fail "Service not running (status: $($svc.Status))" }
+# ── TODO: Windows service status ─────────────────────────────────────────────
+Write-Step "SERVICE STATUS"
+# try { $svc = Get-Service -Name "YourServiceName" -ErrorAction Stop; $svcPass = ($svc.Status -eq "Running") }
+# catch { $svcPass = $false }
+# $results.checks["service_running"] = @{ service = "YourServiceName"; pass = $svcPass }
+# if ($svcPass) { Write-OK "YourServiceName RUNNING" } else { Write-Fail "YourServiceName NOT running"; $failed++ }
 
 # ── TODO: HTTP health check ───────────────────────────────────────────────────
-# try {
-#     $resp = Invoke-WebRequest -Uri "http://${TargetHost}:PORT/health" -TimeoutSec $TimeoutSec -UseBasicParsing
-#     $body = $resp.Content | ConvertFrom-Json
-#     if ($body.status -eq "ok") { Write-Ok "/health ok" } else { Write-Fail "/health returned $($body.status)" }
-# } catch { Write-Fail "/health failed: $_" }
+Write-Step "HTTP HEALTH CHECK"
+# $body = Invoke-WithRetry -Uri "http://${TargetHost}:PORT/health" -TimeoutSec $TimeoutSec
+# $pass = $body -and $body.status -eq "ok"
+# $results.checks["health_PORT"] = @{ uri = "http://${TargetHost}:PORT/health"; pass = $pass }
+# if ($pass) { Write-OK "Health OK" } else { Write-Fail "Health FAILED on port PORT"; $failed++ }
 
-# ── Structured JSON summary ───────────────────────────────────────────────────
-$elapsed = [math]::Round(((Get-Date) - $scriptStart).TotalSeconds)
-$summary = [ordered]@{ app = "__APP_NAME__"; failed = $failed; elapsed_sec = $elapsed }
-$summary | ConvertTo-Json -Depth 3 | Out-File -FilePath (Join-Path (Get-Location) "results.json") -Encoding utf8 -Force
+# ── TODO: DLL injection check ─────────────────────────────────────────────────
+Write-Step "DLL INJECTION CHECK"
+# $dllPass = Test-DllInjected -ProcessName "YourProcess.exe"
+# $results.checks["dll_injection"] = @{ process = "YourProcess.exe"; dll = "ddinjector_x64.dll"; pass = $dllPass }
+# if ($dllPass) { Write-OK "ddinjector_x64.dll in YourProcess.exe" }
+# else          { Write-Fail "ddinjector_x64.dll NOT in YourProcess.exe"; $failed++ }
 
-if ($failed -eq 0) { Write-Host "  ALL CHECKS PASSED" -ForegroundColor Green; exit 0 }
-else               { Write-Host "  $failed CHECK(S) FAILED" -ForegroundColor Red;  exit 1 }
+# ── Skip list (always run — no TODO needed) ───────────────────────────────────
+$violations = Test-SkipListClean
+$skipPass   = ($violations.Count -eq 0)
+$results.checks["skiplist_clean"] = @{ pass = $skipPass; violations = $violations }
+if ($skipPass) { Write-OK "Skip list clean" } else { Write-Fail "Skip list violation: $($violations -join ', ')"; $failed++ }
+
+# ── TODO: Traces ──────────────────────────────────────────────────────────────
+Write-Step "TRACE CHECK"
+# $tracePass = Invoke-TraceCheck -ServiceName "__APP_NAME__" -DDApiKey $DDApiKey -DDSite $DDSite -WaitForTracesSec $WaitForTracesSec
+# if ($null -ne $tracePass) { $results.checks["traces_received"] = @{ service = "__APP_NAME__"; pass = $tracePass } }
+
+$pass = Save-Results -Results $results -AppName "__APP_NAME__" -ScriptStart $scriptStart
+if ($pass) { exit 0 } else { exit 1 }
 VERIFY
 
 sed -i '' "s/__APP_NAME__/$APP_NAME/g" "$APP_DIR/scripts/verify.ps1"
